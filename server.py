@@ -8,6 +8,10 @@ import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
+
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
 from urllib.parse import urlparse
 
 PORT = 7777
@@ -257,5 +261,5 @@ if __name__ == "__main__":
     print("  Starting location daemon...", flush=True)
     start_daemon()
     threading.Thread(target=location_loop, daemon=True).start()
-    server = HTTPServer(("localhost", PORT), Handler)
+    server = ThreadedHTTPServer(("localhost", PORT), Handler)
     server.serve_forever()

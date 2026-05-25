@@ -14,7 +14,7 @@ PoGo Mover is a macOS web app that lets you control your Pokémon GO character's
 
 It works by using Apple's **DVT (Developer Tools) location simulation** API via `pymobiledevice3` — the same mechanism Xcode uses to simulate locations during app development. No jailbreak required.
 
-![PoGo Mover Screenshot](https://i.imgur.com/placeholder.png)
+![PoGo Mover Screenshot](screenshot.png)
 
 ---
 
