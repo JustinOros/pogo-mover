@@ -22,7 +22,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 
 PORT = 7777
 PLATFORM = os.environ.get("POGO_PLATFORM", "ios")
-ANDROID_KEEPALIVE_SECONDS = 2.0
+ANDROID_KEEPALIVE_SECONDS = 0.8
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 COORDS_FILE = os.path.join(BASE_DIR, ".last_coords.json")
 DAEMON_SCRIPT = os.path.join(BASE_DIR, "location_daemon.py")

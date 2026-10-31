@@ -5,6 +5,8 @@ import subprocess
 import threading
 
 PROVIDERS = ("gps", "network")
+OPTIONAL_PROVIDERS = ("fused",)
+_active = list(PROVIDERS)
 
 _serial = None
 _ready = False
@@ -102,6 +104,15 @@ def setup():
             if _failed(rc, out):
                 _ready = False
                 return False, out
+        _active[:] = list(PROVIDERS)
+        for provider in OPTIONAL_PROVIDERS:
+            _shell(f"cmd location providers remove-test-provider {provider}")
+            rc, out = _shell(f"cmd location providers add-test-provider {provider}")
+            if _failed(rc, out):
+                continue
+            rc, out = _shell(f"cmd location providers set-test-provider-enabled {provider} true")
+            if not _failed(rc, out):
+                _active.append(provider)
         _ready = True
         return True, ""
 
@@ -116,7 +127,7 @@ def send(lat, lng):
         location = f"{lat:.7f},{lng:.7f}"
         command = "; ".join(
             f"cmd location providers set-test-provider-location {p} --location {location}"
-            for p in PROVIDERS
+            for p in _active
         )
         rc, out = _shell(command)
         if _failed(rc, out):
@@ -129,6 +140,20 @@ def cleanup():
     global _ready
     with _lock:
         if _serial:
-            for provider in PROVIDERS:
+            for provider in list(PROVIDERS) + list(OPTIONAL_PROVIDERS):
                 _shell(f"cmd location providers remove-test-provider {provider}")
         _ready = False
+
+
+def diagnose():
+    lines = []
+    adb = find_adb()
+    lines.append(f"adb: {adb}")
+    serial, state = pick_device()
+    lines.append(f"device: {serial} ({state})")
+    ok, message = send(33.4484, -112.0740)
+    lines.append(f"test send: {'ok' if ok else 'FAILED ' + message[:200]}")
+    rc, out = _shell("dumpsys location")
+    keep = [l.strip() for l in out.splitlines() if re.search(r"(gps|network|fused|passive).*(provider|mock|test)|mock|test provider", l, re.I)]
+    lines.extend(keep[:25])
+    return lines

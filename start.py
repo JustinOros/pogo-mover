@@ -150,6 +150,12 @@ def setup_android():
     ready, message = android_backend.setup()
     if ready:
         ok("Mock location provider is active")
+        adb_dir = os.path.dirname(android_backend.find_adb())
+        os.environ["PATH"] = adb_dir + os.pathsep + os.environ.get("PATH", "")
+        step("Verifying mock location on the phone...")
+        for line in android_backend.diagnose():
+            print(f"   {line}")
+        print(f"   To use adb by hand: export PATH=\"{adb_dir}:$PATH\"")
         return
     fail("Could not enable mock location through adb.")
     print(f"   {message[:300]}")
