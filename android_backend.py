@@ -11,6 +11,13 @@ _active = list(PROVIDERS)
 _serial = None
 _ready = False
 _lock = threading.Lock()
+_stream = None
+_saved = {}
+TWEAKS = (
+    ("secure", "location_mode", "1"),
+    ("global", "wifi_scan_always_enabled", "0"),
+    ("global", "ble_scan_always_enabled", "0"),
+)
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -86,6 +93,11 @@ def setup():
             return False, f"no authorized Android device (state: {state})"
         _serial = serial
         _shell("cmd location set-location-enabled true")
+        for namespace, key, value in TWEAKS:
+            if (namespace, key) not in _saved:
+                rc, out = _shell(f"settings get {namespace} {key}")
+                _saved[(namespace, key)] = out.strip() if rc == 0 else "null"
+            _shell(f"settings put {namespace} {key} {value}")
         for provider in PROVIDERS:
             _shell(f"cmd location providers remove-test-provider {provider}")
             add = f"cmd location providers add-test-provider {provider}"
@@ -117,8 +129,29 @@ def setup():
         return True, ""
 
 
+def _open_stream():
+    global _stream
+    adb = find_adb()
+    if not adb or not _serial:
+        return None
+    if _stream is not None and _stream.poll() is None:
+        return _stream
+    try:
+        _stream = subprocess.Popen(
+            [adb, "-s", _serial, "shell"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+        )
+    except Exception:
+        _stream = None
+    return _stream
+
+
 def send(lat, lng):
-    global _ready
+    global _ready, _stream
     if not _ready:
         ok, message = setup()
         if not ok:
@@ -129,19 +162,38 @@ def send(lat, lng):
             f"cmd location providers set-test-provider-location {p} --location {location}"
             for p in _active
         )
-        rc, out = _shell(command)
-        if _failed(rc, out):
+        proc = _open_stream()
+        if proc is None:
             _ready = False
-            return False, out
+            return False, "could not open adb shell"
+        try:
+            proc.stdin.write(command + "\n")
+            proc.stdin.flush()
+        except Exception as e:
+            _stream = None
+            _ready = False
+            return False, str(e)
         return True, ""
 
 
 def cleanup():
-    global _ready
+    global _ready, _stream
     with _lock:
+        if _stream is not None:
+            try:
+                _stream.kill()
+            except Exception:
+                pass
+            _stream = None
         if _serial:
             for provider in list(PROVIDERS) + list(OPTIONAL_PROVIDERS):
                 _shell(f"cmd location providers remove-test-provider {provider}")
+            for (namespace, key), value in _saved.items():
+                if value in ("", "null"):
+                    _shell(f"settings delete {namespace} {key}")
+                else:
+                    _shell(f"settings put {namespace} {key} {value}")
+            _saved.clear()
         _ready = False
 
 
