@@ -1,8 +1,10 @@
 import os
 import re
 import shutil
+import socket
 import subprocess
 import threading
+import time
 
 PROVIDERS = ("gps", "network")
 OPTIONAL_PROVIDERS = ("fused",)
@@ -13,6 +15,11 @@ _ready = False
 _lock = threading.Lock()
 _stream = None
 _saved = {}
+_mode = "none"
+_sock = None
+_app_error = [""]
+APP_PACKAGE = "com.pogomover.mock"
+APP_PORT = 7788
 TWEAKS = (
     ("secure", "location_mode", "1"),
     ("global", "wifi_scan_always_enabled", "0"),
@@ -21,6 +28,17 @@ TWEAKS = (
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_APK_CANDIDATES = (
+    os.path.join(BASE_DIR, "pogo-mock.apk"),
+    os.path.join(BASE_DIR, "android-app", "app", "build", "outputs", "apk", "debug", "app-debug.apk"),
+)
+
+
+def find_apk():
+    for path in APP_APK_CANDIDATES:
+        if os.path.isfile(path):
+            return path
+    return None
 
 
 def find_adb():
@@ -84,15 +102,82 @@ def pick_device():
     return None, None
 
 
+def mode():
+    return _mode
+
+
+def app_installed():
+    rc, out = _shell(f"pm list packages {APP_PACKAGE}")
+    return rc == 0 and f"package:{APP_PACKAGE}" in out
+
+
+def _connect_app():
+    global _sock
+    if _sock is not None:
+        try:
+            _sock.close()
+        except Exception:
+            pass
+        _sock = None
+    prefix = ["-s", _serial] if _serial else []
+    _run(prefix + ["forward", f"tcp:{APP_PORT}", f"tcp:{APP_PORT}"])
+    for _ in range(40):
+        try:
+            s = socket.create_connection(("127.0.0.1", APP_PORT), timeout=2)
+            s.settimeout(2)
+            s.sendall(b"ping\n")
+            if s.recv(16).startswith(b"ok"):
+                _sock = s
+                return True
+            s.close()
+        except Exception:
+            pass
+        time.sleep(0.3)
+    return False
+
+
+def _setup_app():
+    if not app_installed():
+        apk = find_apk()
+        if not apk:
+            return False, "mock app not installed and pogo-mock.apk not found"
+        prefix = ["-s", _serial] if _serial else []
+        rc, out = _run(prefix + ["install", "-r", apk], timeout=120)
+        if rc != 0 or "Success" not in out:
+            return False, f"apk install failed: {out[:200]}"
+    _shell(f"pm grant {APP_PACKAGE} android.permission.ACCESS_FINE_LOCATION")
+    _shell(f"pm grant {APP_PACKAGE} android.permission.ACCESS_COARSE_LOCATION")
+    _shell(f"pm grant {APP_PACKAGE} android.permission.POST_NOTIFICATIONS")
+    rc, out = _shell(f"appops set {APP_PACKAGE} android:mock_location allow")
+    if _failed(rc, out):
+        return False, f"could not allow mock location for app: {out[:200]}"
+    _shell(f"am force-stop {APP_PACKAGE}")
+    _shell("input keyevent KEYCODE_WAKEUP")
+    rc, out = _shell(f"am start -n {APP_PACKAGE}/.MainActivity --ez autostart true")
+    if _failed(rc, out) or "Error" in out:
+        return False, f"could not open mock app (unlock the phone): {out[:200]}"
+    if not _connect_app():
+        return False, "mock app service did not answer"
+    return True, ""
+
+
 def setup():
-    global _serial, _ready
+    global _serial, _ready, _mode
     with _lock:
         serial, state = pick_device()
         if state != "device":
             _ready = False
+            _mode = "none"
             return False, f"no authorized Android device (state: {state})"
         _serial = serial
         _shell("cmd location set-location-enabled true")
+        ok, message = _setup_app()
+        if ok:
+            _mode = "app"
+            _ready = True
+            return True, ""
+        _app_error[0] = message
+        _mode = "adb"
         for namespace, key, value in TWEAKS:
             if (namespace, key) not in _saved:
                 rc, out = _shell(f"settings get {namespace} {key}")
@@ -150,12 +235,35 @@ def _open_stream():
     return _stream
 
 
+def app_error():
+    return _app_error[0]
+
+
+def _send_app(lat, lng):
+    global _ready
+    data = f"{lat:.7f},{lng:.7f}\n".encode()
+    for attempt in range(2):
+        try:
+            if _sock is None and not _connect_app():
+                break
+            _sock.sendall(data)
+            return True, ""
+        except Exception:
+            if not _connect_app():
+                break
+    _ready = False
+    return False, "lost connection to mock app"
+
+
 def send(lat, lng):
     global _ready, _stream
     if not _ready:
         ok, message = setup()
         if not ok:
             return False, message
+    if _mode == "app":
+        with _lock:
+            return _send_app(lat, lng)
     with _lock:
         location = f"{lat:.7f},{lng:.7f}"
         command = "; ".join(
@@ -177,8 +285,17 @@ def send(lat, lng):
 
 
 def cleanup():
-    global _ready, _stream
+    global _ready, _stream, _sock, _mode
     with _lock:
+        if _sock is not None:
+            try:
+                _sock.close()
+            except Exception:
+                pass
+            _sock = None
+        if _mode == "app" and _serial:
+            _shell(f"am force-stop {APP_PACKAGE}")
+            _run(["-s", _serial, "forward", "--remove", f"tcp:{APP_PORT}"])
         if _stream is not None:
             try:
                 _stream.kill()
@@ -203,6 +320,9 @@ def diagnose():
     lines.append(f"adb: {adb}")
     serial, state = pick_device()
     lines.append(f"device: {serial} ({state})")
+    lines.append(f"mode: {_mode}")
+    if _mode == "adb" and _app_error[0]:
+        lines.append(f"mock app unavailable: {_app_error[0]}")
     ok, message = send(33.4484, -112.0740)
     lines.append(f"test send: {'ok' if ok else 'FAILED ' + message[:200]}")
     rc, out = _shell("dumpsys location")

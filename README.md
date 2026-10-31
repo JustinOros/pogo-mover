@@ -65,6 +65,16 @@ PoGo Mover also drives Android phones, with no third-party app installed on the 
 
 `start.py` registers the `gps` and `network` test providers, grants the shell the mock location appop, and the server re-sends your position about every 2 seconds so the real location does not return. Providers are removed when you press Ctrl+C.
 
+### Pixel and other phones with Google Play Services (mock app)
+
+On a Pixel, Google Play Services overrides the shell test providers within about a second. The fix is the small mock location app in `android-app/`, which uses Google's own fused location mock API.
+
+1. Open the `android-app` folder in Android Studio and let Gradle sync finish
+2. Build, Build Bundle(s) / APK(s), Build APK(s)
+3. Run `python3 start.py --android`. It finds the built APK, installs it, grants permissions, selects it as the mock location app and starts it
+
+The Mac sends positions to the app over `adb forward` (localhost port 7788). If no APK is found, PoGo Mover falls back to the plain adb test providers.
+
 ### Android caveats
 
 - Tested against a stub `adb` only. Behavior on real phones varies by manufacturer, and some (Xiaomi, Samsung with Knox policies) restrict mock location from the shell.
@@ -186,6 +196,7 @@ pogo-mover/
 ├── server.py             # Local HTTP server + GPS command relay
 ├── location_daemon.py    # Persistent DVT connection to iPhone
 ├── android_backend.py    # adb mock location backend for Android
+├── android-app/          # Android Studio project for the mock location app
 ├── index.html            # Web app (map, controls, UI)
 └── README.md             # This file
 ```

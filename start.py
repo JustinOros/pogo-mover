@@ -111,6 +111,77 @@ def install_adb():
         fail(f"Download failed: {e}")
         return False
 
+def find_java_home():
+    candidates = [
+        os.environ.get("JAVA_HOME"),
+        "/Applications/Android Studio.app/Contents/jbr/Contents/Home",
+        "/Applications/Android Studio Preview.app/Contents/jbr/Contents/Home",
+    ]
+    try:
+        out = subprocess.run(["/usr/libexec/java_home"], capture_output=True, text=True, timeout=5).stdout.strip()
+        candidates.append(out)
+    except Exception:
+        pass
+    for path in candidates:
+        if path and os.path.isfile(os.path.join(path, "bin", "java")):
+            return path
+    return None
+
+def find_sdk():
+    candidates = [
+        os.environ.get("ANDROID_HOME"),
+        os.environ.get("ANDROID_SDK_ROOT"),
+        os.path.expanduser("~/Library/Android/sdk"),
+        os.path.expanduser("~/Android/Sdk"),
+    ]
+    for path in candidates:
+        if path and os.path.isdir(path):
+            return path
+    return None
+
+def build_mock_app():
+    import android_backend
+    import io
+    import urllib.request
+    import zipfile
+    if android_backend.find_apk():
+        return True
+    base = os.path.dirname(os.path.abspath(__file__))
+    project = os.path.join(base, "android-app")
+    if not os.path.isdir(project):
+        return False
+    step("Building the PoGo Mock app (first time only)...")
+    java_home = find_java_home()
+    sdk = find_sdk()
+    if not java_home or not sdk:
+        warn("Need Android Studio (Java) and the Android SDK to build the app automatically.")
+        return False
+    with open(os.path.join(project, "local.properties"), "w") as f:
+        f.write(f"sdk.dir={sdk}\n")
+    dist_dir = os.path.join(base, ".gradle-dist")
+    gradle = os.path.join(dist_dir, "gradle-8.7", "bin", "gradle")
+    if not os.path.isfile(gradle):
+        warn("Downloading Gradle 8.7...")
+        try:
+            with urllib.request.urlopen("https://services.gradle.org/distributions/gradle-8.7-bin.zip", timeout=300) as r:
+                data = r.read()
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                z.extractall(dist_dir)
+            os.chmod(gradle, 0o755)
+        except Exception as e:
+            fail(f"Gradle download failed: {e}")
+            return False
+    env = dict(os.environ)
+    env["JAVA_HOME"] = java_home
+    env["ANDROID_HOME"] = sdk
+    warn("Building (this can take a few minutes the first time)...")
+    result = subprocess.run([gradle, "assembleDebug", "--no-daemon", "-q"], cwd=project, env=env)
+    if result.returncode != 0 or not android_backend.find_apk():
+        fail("Automatic build failed.")
+        return False
+    ok("PoGo Mock app built")
+    return True
+
 def setup_android():
     import android_backend
     step("Checking for adb...")
@@ -146,6 +217,8 @@ def setup_android():
             print("   └─────────────────────────────────────────────────┘")
         choice = input("   Press Enter to retry, or Ctrl+C to quit: ")
 
+    build_mock_app()
+
     step("Enabling mock location access...")
     ready, message = android_backend.setup()
     if ready:
@@ -155,6 +228,16 @@ def setup_android():
         step("Verifying mock location on the phone...")
         for line in android_backend.diagnose():
             print(f"   {line}")
+        if android_backend.mode() == "adb":
+            print()
+            print("   ┌─────────────────────────────────────────────────┐")
+            print("   │  MOCK APP NOT INSTALLED (needed on Pixel)       │")
+            print("   ├─────────────────────────────────────────────────┤")
+            print("   │  1. Open the android-app folder in Android      │")
+            print("   │     Studio and let Gradle sync finish           │")
+            print("   │  2. Build > Build APK(s)                        │")
+            print("   │  3. Rerun start.py (it installs the APK)        │")
+            print("   └─────────────────────────────────────────────────┘")
         print(f"   To use adb by hand: export PATH=\"{adb_dir}:$PATH\"")
         return
     fail("Could not enable mock location through adb.")
