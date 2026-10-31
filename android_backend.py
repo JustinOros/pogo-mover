@@ -11,10 +11,14 @@ _ready = False
 _lock = threading.Lock()
 
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
 def find_adb():
     home = os.path.expanduser("~")
     candidates = [
         os.environ.get("POGO_ADB"),
+        os.path.join(BASE_DIR, "platform-tools", "adb"),
         shutil.which("adb"),
         os.path.join(home, "Library/Android/sdk/platform-tools/adb"),
         os.path.join(home, "Android/Sdk/platform-tools/adb"),

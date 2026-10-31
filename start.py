@@ -76,17 +76,40 @@ def choose_platform():
     return ask_platform()
 
 def install_adb():
+    import io
+    import urllib.request
+    import zipfile
+    base = os.path.dirname(os.path.abspath(__file__))
     brew = subprocess.run(["which", "brew"], capture_output=True, text=True).stdout.strip()
-    if not brew:
-        print("   adb (Android platform-tools) is required.")
-        print("   Install it from https://developer.android.com/tools/releases/platform-tools")
-        print("   or install Homebrew (https://brew.sh) and rerun this script.")
+    if brew:
+        warn("adb not found, installing with Homebrew...")
+        result = subprocess.run([brew, "install", "android-platform-tools"])
+        if result.returncode == 0:
+            return True
+        warn("Homebrew install failed, downloading directly instead...")
+    else:
+        warn("adb not found, downloading Android platform-tools from Google...")
+    system = "darwin" if platform.system() == "Darwin" else ("windows" if platform.system() == "Windows" else "linux")
+    url = f"https://dl.google.com/android/repository/platform-tools-latest-{system}.zip"
+    try:
+        with urllib.request.urlopen(url, timeout=120) as r:
+            data = r.read()
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            z.extractall(base)
+        adb = os.path.join(base, "platform-tools", "adb")
+        os.chmod(adb, 0o755)
+        for name in os.listdir(os.path.join(base, "platform-tools")):
+            path = os.path.join(base, "platform-tools", name)
+            if os.path.isfile(path) and not name.endswith((".dll", ".txt", ".exe")):
+                try:
+                    os.chmod(path, 0o755)
+                except Exception:
+                    pass
+        subprocess.run(["xattr", "-dr", "com.apple.quarantine", os.path.join(base, "platform-tools")], capture_output=True)
+        return True
+    except Exception as e:
+        fail(f"Download failed: {e}")
         return False
-    choice = input("   adb not found. Install it now with Homebrew? [Y/n]: ").strip().lower()
-    if choice == "n":
-        return False
-    result = subprocess.run([brew, "install", "android-platform-tools"])
-    return result.returncode == 0
 
 def setup_android():
     import android_backend
