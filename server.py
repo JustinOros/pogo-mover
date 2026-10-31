@@ -1,7 +1,9 @@
+import atexit
 import json
 import math
 import mimetypes
 import os
+import random
 import subprocess
 import sys
 import threading
@@ -9,12 +11,18 @@ import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
+from urllib.parse import urlparse
+
+import android_backend
+
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
-from urllib.parse import urlparse
+
 
 PORT = 7777
+PLATFORM = os.environ.get("POGO_PLATFORM", "ios")
+ANDROID_KEEPALIVE_SECONDS = 2.0
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 COORDS_FILE = os.path.join(BASE_DIR, ".last_coords.json")
 DAEMON_SCRIPT = os.path.join(BASE_DIR, "location_daemon.py")
@@ -140,8 +148,6 @@ def send_location_cli(lat, lng):
     last_result = {"method": None, "ok": False, "error": "all methods failed"}
     return False
 
-import random
-
 def add_gps_jitter(lat, lng):
     meter_lat = 1.0 / 111320.0
     meter_lng = 1.0 / (111320.0 * max(abs(math.cos(math.radians(lat))), 0.001))
@@ -151,8 +157,21 @@ def add_gps_jitter(lat, lng):
         lng + random.uniform(-jitter_m, jitter_m) * meter_lng
     )
 
+def send_android(lat, lng):
+    global last_result
+    ok, message = android_backend.send(lat, lng)
+    if ok:
+        last_result = {"method": "adb mock location", "ok": True, "error": None}
+    else:
+        last_result = {"method": None, "ok": False, "error": message[:200]}
+        print(f"  [!] Android send failed: {message[:200]}", flush=True)
+    return ok
+
 def set_location(lat, lng):
     jlat, jlng = add_gps_jitter(lat, lng)
+    if PLATFORM == "android":
+        send_android(jlat, jlng)
+        return
     if not send_via_daemon(jlat, jlng):
         send_location_cli(jlat, jlng)
 
@@ -162,9 +181,10 @@ _target_updated = time.time()
 _target_lock = threading.Lock()
 _last_sent_lat = None
 _last_sent_lng = None
+_last_sent_time = 0
 
 def location_loop():
-    global _last_sent_lat, _last_sent_lng
+    global _last_sent_lat, _last_sent_lng, _last_sent_time
     while True:
         with _target_lock:
             lat = _target_lat
@@ -174,10 +194,13 @@ def location_loop():
             time.sleep(0.1)
             continue
 
-        if lat != _last_sent_lat or lng != _last_sent_lng:
+        changed = lat != _last_sent_lat or lng != _last_sent_lng
+        stale = PLATFORM == "android" and (time.time() - _last_sent_time) > ANDROID_KEEPALIVE_SECONDS
+        if changed or stale:
             set_location(lat, lng)
             _last_sent_lat = lat
             _last_sent_lng = lng
+            _last_sent_time = time.time()
         else:
             time.sleep(0.1)
 
@@ -220,7 +243,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/coords":
             return self.send_json(current_coords)
         if path == "/status":
-            return self.send_json({"ok": True, "spoof": last_result})
+            return self.send_json({"ok": True, "platform": PLATFORM, "spoof": last_result})
         if path in ("/", "/index.html"):
             path = "/index.html"
         file_path = os.path.join(BASE_DIR, path.lstrip("/"))
@@ -257,9 +280,20 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
 
 if __name__ == "__main__":
-    print(f"PoGo Mover running at http://localhost:{PORT}")
-    print("  Starting location daemon...", flush=True)
-    start_daemon()
+    print(f"PoGo Mover running at http://localhost:{PORT} ({PLATFORM})")
+    if PLATFORM == "android":
+        ready, message = android_backend.setup()
+        if ready:
+            print("  [✓] Android mock location ready", flush=True)
+        else:
+            print(f"  [!] Android setup failed: {message[:200]}", flush=True)
+        atexit.register(android_backend.cleanup)
+    else:
+        print("  Starting location daemon...", flush=True)
+        start_daemon()
     threading.Thread(target=location_loop, daemon=True).start()
     server = ThreadedHTTPServer(("localhost", PORT), Handler)
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass

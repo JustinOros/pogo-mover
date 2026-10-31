@@ -181,7 +181,7 @@
     </div>
     <div id="serverWarning" class="server-warning" style="display:none">
       <strong>⚠ Server offline</strong>
-      Start <code>start.py</code> on your Mac and connect your iPhone via USB.
+      Start <code>start.py</code> on your Mac and connect your phone via USB.
     </div>
   </div>
 </div>
@@ -195,7 +195,7 @@
     <div class="modal-header"><div class="modal-icon">✨</div><div class="modal-title">TELEPORT<br>WARNING</div></div>
     <div class="modal-body">
       <div class="warning-box"><span class="warn-title">⚠ IMPORTANT — READ BEFORE TELEPORTING</span>Teleporting instantly moves your character across large distances. Pokémon GO can detect this and issue a <strong>soft ban</strong>.</div>
-      <div class="cooldown-box"><strong>Before you teleport:</strong><br>1. Force-close Pokémon GO on your iPhone<br>2. Confirm the teleport here<br>3. Wait the recommended cooldown time<br>4. Then reopen Pokémon GO<br><br><strong>Recommended wait time:</strong> ~2 hours for long distances, 30 min for short hops</div>
+      <div class="cooldown-box"><strong>Before you teleport:</strong><br>1. Force-close Pokémon GO on your phone<br>2. Confirm the teleport here<br>3. Wait the recommended cooldown time<br>4. Then reopen Pokémon GO<br><br><strong>Recommended wait time:</strong> ~2 hours for long distances, 30 min for short hops</div>
     </div>
     <div class="modal-dest" id="modalDestCoords"></div>
     <div class="modal-actions">
@@ -708,7 +708,7 @@ async function checkServer() {
     if (r.ok) {
       serverOnline = true;
       document.getElementById("statusDot").className = "status-dot connected";
-      document.getElementById("statusText").textContent = "iPhone Connected";
+      document.getElementById("statusText").textContent = "Phone Connected";
       document.getElementById("serverWarning").style.display = "none";
       const coords = await fetch(`${SERVER}/coords`).then(r => r.json());
       lat = coords.lat; lng = coords.lng;

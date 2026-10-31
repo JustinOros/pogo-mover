@@ -35,6 +35,112 @@ def check_python():
         sys.exit(1)
     ok(f"Python {sys.version.split()[0]}")
 
+def ask_platform():
+    print()
+    print("   Which phone are you using?")
+    print("   1. iPhone")
+    print("   2. Android")
+    while True:
+        choice = input("   Enter 1 or 2: ").strip()
+        if choice == "1":
+            return "ios"
+        if choice == "2":
+            return "android"
+
+def choose_platform():
+    step("Detecting your phone...")
+    forced = os.environ.get("POGO_PLATFORM", "").lower()
+    for arg in sys.argv[1:]:
+        if arg in ("--android", "android"):
+            forced = "android"
+        if arg in ("--ios", "ios", "--iphone"):
+            forced = "ios"
+    if forced in ("ios", "android"):
+        ok(f"Platform set to {forced}")
+        return forced
+    import android_backend
+    android_found = False
+    if android_backend.find_adb():
+        android_found = any(state == "device" for _, state in android_backend.list_devices())
+    ios_found = platform.system() == "Darwin" and (detect_iphone_system_profiler() or detect_iphone_ioreg())
+    if android_found and ios_found:
+        warn("Both an iPhone and an Android phone are connected.")
+        return ask_platform()
+    if android_found:
+        ok("Android phone detected")
+        return "android"
+    if ios_found:
+        ok("iPhone detected")
+        return "ios"
+    warn("No phone detected yet.")
+    return ask_platform()
+
+def install_adb():
+    brew = subprocess.run(["which", "brew"], capture_output=True, text=True).stdout.strip()
+    if not brew:
+        print("   adb (Android platform-tools) is required.")
+        print("   Install it from https://developer.android.com/tools/releases/platform-tools")
+        print("   or install Homebrew (https://brew.sh) and rerun this script.")
+        return False
+    choice = input("   adb not found. Install it now with Homebrew? [Y/n]: ").strip().lower()
+    if choice == "n":
+        return False
+    result = subprocess.run([brew, "install", "android-platform-tools"])
+    return result.returncode == 0
+
+def setup_android():
+    import android_backend
+    step("Checking for adb...")
+    if not android_backend.find_adb():
+        if not install_adb() or not android_backend.find_adb():
+            fail("adb is required for Android. Install it and rerun start.py.")
+            sys.exit(1)
+    ok(f"adb found at {android_backend.find_adb()}")
+
+    step("Checking for connected Android phone...")
+    while True:
+        devices = android_backend.list_devices()
+        states = [state for _, state in devices]
+        if "device" in states:
+            ok("Android phone connected and authorized")
+            break
+        if "unauthorized" in states:
+            warn("Phone is connected but has not authorized this Mac.")
+            print("   Unlock the phone and tap 'Allow' on the USB debugging prompt")
+            print("   (tick 'Always allow from this computer').")
+        else:
+            warn("No Android phone found.")
+            print()
+            print("   ┌─────────────────────────────────────────────────┐")
+            print("   │  HOW TO ENABLE USB DEBUGGING                    │")
+            print("   ├─────────────────────────────────────────────────┤")
+            print("   │  1. Settings → About phone                      │")
+            print("   │  2. Tap 'Build number' 7 times                  │")
+            print("   │  3. Settings → System → Developer options       │")
+            print("   │  4. Turn on 'USB debugging'                     │")
+            print("   │  5. Plug in the USB cable, choose 'File         │")
+            print("   │     transfer' mode, and tap 'Allow' on the phone │")
+            print("   └─────────────────────────────────────────────────┘")
+        choice = input("   Press Enter to retry, or Ctrl+C to quit: ")
+
+    step("Enabling mock location access...")
+    ready, message = android_backend.setup()
+    if ready:
+        ok("Mock location provider is active")
+        return
+    fail("Could not enable mock location through adb.")
+    print(f"   {message[:300]}")
+    print()
+    print("   ┌─────────────────────────────────────────────────┐")
+    print("   │  IF THIS FAILS                                  │")
+    print("   ├─────────────────────────────────────────────────┤")
+    print("   │  Developer options → 'Disable permission        │")
+    print("   │  monitoring' (Xiaomi) or 'USB debugging         │")
+    print("   │  (Security settings)' ON, then rerun.           │")
+    print("   │  Some phones block mock location from adb.     │")
+    print("   └─────────────────────────────────────────────────┘")
+    input("   Press Enter to continue anyway, or Ctrl+C to quit: ")
+
 def install_pymobiledevice3():
     step("Checking for pymobiledevice3...")
     try:
@@ -381,7 +487,8 @@ def open_browser():
     webbrowser.open(url)
     ok(f"Opened: {url}")
 
-def start_server():
+def start_server(target="ios"):
+    os.environ["POGO_PLATFORM"] = target
     server_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server.py")
     step("Starting GPS server on http://localhost:7777...")
     ok("Server running — press Ctrl+C to stop.")
@@ -392,21 +499,27 @@ def start_server():
         pass
 
 def main():
-    banner("PoGo Mover — Pokémon GO GPS Controller", "=")
+    banner("PoGo Mover — GPS Controller", "=")
     print("  Setting everything up automatically...\n")
 
-    check_macos()
     check_python()
-    install_pymobiledevice3()
-    check_iphone()
-    check_and_guide_developer_mode()
-    tunnel_proc = maybe_start_tunnel()
-    mount_developer_image()
+    target = choose_platform()
+    tunnel_proc = None
+
+    if target == "android":
+        setup_android()
+    else:
+        check_macos()
+        install_pymobiledevice3()
+        check_iphone()
+        check_and_guide_developer_mode()
+        tunnel_proc = maybe_start_tunnel()
+        mount_developer_image()
 
     banner("All set! Launching PoGo Mover", "-")
 
     threading.Thread(target=open_browser, daemon=True).start()
-    start_server()
+    start_server(target)
 
     if tunnel_proc and tunnel_proc.poll() is None:
         tunnel_proc.terminate()

@@ -51,10 +51,32 @@ Pokémon GO reads spoofed GPS
 
 ---
 
+## Android Support
+
+PoGo Mover also drives Android phones, with no third-party app installed on the phone. It uses `adb` and Android's built-in mock location test providers (`cmd location providers`), the same mechanism Android Studio uses.
+
+### Android setup
+
+1. On the phone: Settings, About phone, tap **Build number** 7 times
+2. Settings, System, Developer options, turn on **USB debugging**
+3. Plug in the USB cable and tap **Allow** on the prompt (tick "Always allow")
+4. On the Mac: `python3 start.py` (it offers to install `adb` through Homebrew, or run `brew install android-platform-tools` yourself)
+5. Force an Android launch with `python3 start.py --android` if both phones are connected
+
+`start.py` registers the `gps` and `network` test providers, grants the shell the mock location appop, and the server re-sends your position about every 2 seconds so the real location does not return. Providers are removed when you press Ctrl+C.
+
+### Android caveats
+
+- Tested against a stub `adb` only. Behavior on real phones varies by manufacturer, and some (Xiaomi, Samsung with Knox policies) restrict mock location from the shell.
+- Pokémon GO checks for mock locations on Android and will probably flag them, so the Error 12 limitation below should be expected there too. This project does not try to hide mock locations.
+- Android 12 and newer is the target. Older versions may lack `cmd location providers`.
+
+---
+
 ## Requirements
 
 - **Mac** running macOS 12 or later
-- **iPhone** with iOS 15+ (tested on iOS 26)
+- **iPhone** with iOS 15+ (tested on iOS 26), or an **Android** phone with USB debugging (see above)
 - **USB cable** (Lightning or USB-C)
 - **Python 3.8+**
 - **Xcode** (free, from Mac App Store) — needed once to enable Developer Mode on the iPhone
@@ -163,6 +185,7 @@ pogo-mover/
 ├── start.py              # All-in-one launcher — run this
 ├── server.py             # Local HTTP server + GPS command relay
 ├── location_daemon.py    # Persistent DVT connection to iPhone
+├── android_backend.py    # adb mock location backend for Android
 ├── index.html            # Web app (map, controls, UI)
 └── README.md             # This file
 ```
